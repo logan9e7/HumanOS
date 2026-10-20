@@ -128,9 +128,14 @@ test('operator metrics require a separate secret and contain no conversation or 
  const response=await handleApi(new Request('https://humanos.test/api/ops/metrics',{headers:{authorization:'Bearer '+env.OPS_TOKEN}}),env);assert.equal(response.status,200);const output=await response.text();assert.ok(!output.includes('secret sentence'));assert.ok(!output.includes('alice'));
  const logs=requestLogs.join(' ');assert.ok(!logs.includes('secret sentence'));assert.ok(!logs.includes('alice'));assert.ok(!logs.includes(env.OPS_TOKEN));
 });
-test('old evidence is still inspectable through a hypothesis and cannot leak to another user',async()=>{
- const {req}=setup();await consent(req);await consent(req,'bob');await send(req,'I feel lonely.');const h=(await modelState(req)).hypotheses[0];
- assert.ok((await req('evidence?hypothesis='+h.id)).body.observations.length>0);assert.equal((await req('evidence?hypothesis='+h.id,'bob')).status,404);
+test('evidence remains private and is available only in the account archive',async()=>{
+ const {req}=setup();await consent(req);await consent(req,'bob');await send(req,'I feel lonely.');
+ const state=await modelState(req);const h=state.hypotheses[0];
+ assert.ok(state.observations.length>0);
+ assert.equal((await req('evidence?hypothesis='+h.id)).status,404);
+ assert.equal((await req('evidence?hypothesis='+h.id,'bob')).status,404);
+ assert.ok((await req('export')).body.observations.length>0);
+ assert.equal((await req('export','bob')).body.observations.length,0);
 });
 test('failed atomic writes persist no partial conversation and release the user lock',async()=>{
  const {req,env,db}=setup();await consent(req);const realBatch=env.DB.batch.bind(env.DB);let rejectOnce=true;
