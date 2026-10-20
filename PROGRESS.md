@@ -13,10 +13,20 @@
 - Explicit per-user choice before external model processing; visible fallback.
 - Private export/deletion, per-user locks, idempotency and daily message limit.
 
+## Layout and navigation update
+
+- New collapsible desktop sidebar with a remembered device preference, section descriptions and model progress.
+- Mobile navigation drawer keeps sign-in/sign-out available, contains keyboard focus and closes on Escape, outside click or section selection.
+- Sticky workspace header, skip link and focused page headings support keyboard navigation.
+- Shorter page headings, larger text, stronger contrast and a wider conversation panel.
+- Context and evidence panels adapt to the available workspace width; parameter cards become a single column on small phones.
+- Shared layout is isolated in `app/WorkspaceLayout.tsx`.
+
 ## Verification
 
 - 22 backend tests pass.
-- TypeScript checks pass.
+- TypeScript checks and production build pass.
+- Server-rendered layout checks pass for all four sections and both account states.
 - Real Groq model-list request succeeds.
 - Real synthetic inference through the adapter succeeds with a structured reply and valid observation.
 - Prior deployment: live health/catalog/homepage succeed, anonymous private API returns 401, and seven D1 tables verified.
