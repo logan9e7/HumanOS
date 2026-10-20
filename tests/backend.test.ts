@@ -5,7 +5,9 @@ import {readFileSync,readdirSync} from 'node:fs';
 import {PARAMETERS} from '../server/parameters';
 import {classify} from '../server/classifier';
 import {extractBaseline,buildHypotheses,validateObservations} from '../server/inference';
-import {handleApi} from '../server/api';
+import {handleApi,loadState,applyMemoryFeedback} from '../server/api';
+import {publicMessage} from '../server/client-state';
+import {responsePolicy,selectMemory,correctionKind} from '../server/memory';
 import {callProvider} from '../server/provider';
 import {collectExport} from '../lib/export-data';
 const requestLogs:string[]=[];
@@ -28,7 +30,9 @@ function setup(){const db=new TestD1();const env:any={DB:db,USAGE_HASH_KEY:'unit
  const headers:any={'content-type':'application/json',origin};if(user)headers['oai-authenticated-user-id']=user;
  if(path==='export'&&method==='GET'&&user){const check=await handleApi(new Request('https://humanos.test/api/export',{headers}),env);if(check.ok){const file=await collectExport(url=>handleApi(new Request('https://humanos.test'+url,{headers}),env));return {status:200,body:JSON.parse(await file.text())};}return {status:check.status,body:await check.json() as any};}
  const r=await handleApi(new Request('https://humanos.test/api/'+path,{method,headers,body:payload===undefined?undefined:JSON.stringify(payload)}),env);
- return {status:r.status,body:await r.json() as any};};return {db,env,req};}
+ return {status:r.status,body:await r.json() as any};};const client=Object.assign(req,{internalState:(user='alice')=>loadState(env.DB,user),internalFeedback:(user:string,payload:any)=>applyMemoryFeedback(env.DB,user,payload)});return {db,env,req:client};}
+async function modelState(req:any,user='alice'){return {...(await req('me',user)).body,...await req.internalState(user)};}
+async function internalFeedback(req:any,user:string,method:string,payload:any){const result=await req.internalFeedback(user,payload);return {status:result.status,body:await result.json()};}
 async function consent(req:any,user='alice'){assert.equal((await req('consent',user,'POST',{accept:true})).status,200);}
 const send=(req:any,text:string,user='alice',requestId=crypto.randomUUID())=>req('messages',user,'POST',{text,requestId});
 test('catalog has 50 unique parameters across five groups; no guessed hormone values',()=>{assert.equal(PARAMETERS.length,50);assert.equal(new Set(PARAMETERS.map(p=>p.id)).size,50);assert.equal(new Set(PARAMETERS.map(p=>p.group)).size,5);assert.ok(!PARAMETERS.some(p=>/cortisol|dopamine|serotonin/i.test(p.id)));});
@@ -38,18 +42,18 @@ test('negation is counter-evidence and past feelings stay historical',()=>{const
 test('extracts personal memories and preserves exact source text',()=>{const t='I miss dancing with my college friends.';const o=extractBaseline(t).observations;assert.ok(o.some(o=>o.parameterId==='recent_dance'));assert.ok(o.some(o=>o.parameterId==='nostalgia'));assert.ok(o.every(o=>t.includes(o.quote)));});
 test('provider observations reject invented evidence, unknown parameters, and invented intensity',()=>{const text='I am feeling anxious.';const o={parameterId:'anxiety',quote:text,value:'Anxiety expressed',direction:'support',scope:'general',timeframe:'current',intensity:9};assert.equal(validateObservations([o],text)[0].intensity,null);assert.equal(validateObservations([{...o,quote:'Not in the message'}],text).length,0);assert.equal(validateObservations([{...o,parameterId:'cortisol'}],text).length,0);assert.equal(validateObservations([{...o,quote:'My friend is anxious.'}],'My friend is anxious.').length,0);});
 test('unknown parameters stay unknown; decay does not change historical events into present traits',()=>{const rows=[{id:'o1',parameter_id:'sadness',scope:'general',quote:'I used to be sad.',value:'Past sadness',direction:'support',timeframe:'past',source:'explicit',episode_key:'one',created_at:'2020-01-01T00:00:00Z',retracted:0}];const h=buildHypotheses(rows);assert.equal(h[0].status,'historical');assert.equal(h[0].kind,'state');assert.equal(h.length,1);});
-test('public catalog/health work while private endpoints require sign-in',async()=>{const {req}=setup();assert.equal((await req('catalog','')).body.parameters.length,50);assert.equal((await req('health','')).status,200);for(const path of ['me','export'])assert.equal((await req(path,'')).status,401);assert.equal((await send(req,'I am happy.','')).status,401);});
-test('storage requires consent and cross-origin writes are rejected',async()=>{const {req}=setup();assert.equal((await send(req,'I feel sad.')).status,403);assert.equal((await req('consent','alice','POST',{accept:true},'https://attacker.test')).status,403);await consent(req);assert.equal((await req('me')).body.parameters.filter((p:any)=>p.estimate).length,0);});
-test('conversation persists messages, evidence, hypotheses and revisions; retry is idempotent',async()=>{const {req}=setup();await consent(req);const requestId=crypto.randomUUID();assert.equal((await send(req,'I feel anxious about work.', 'alice',requestId)).status,200);assert.equal((await send(req,'I feel anxious about work.', 'alice',requestId)).body.replayed,true);const s=(await req('me')).body;assert.equal(s.messages.length,2);assert.ok(s.observations.some((o:any)=>o.parameter_id==='anxiety'));assert.ok(s.hypotheses.some((h:any)=>h.parameter_id==='anxiety'));assert.equal(s.revisions.length,1);assert.equal(s.profile.active_request,undefined);});
-test('duplicate source messages do not accumulate independent evidence',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely.');await send(req,'I feel lonely.');const s=(await req('me')).body;assert.equal(s.observations.filter((o:any)=>o.parameter_id==='loneliness').length,1);});
-test('users cannot read, correct, export, or delete another person’s records',async()=>{const {req}=setup();await consent(req);await consent(req,'bob');await send(req,'I feel lonely today.');const a=(await req('me')).body;const b=(await req('me','bob')).body;assert.equal(b.messages.length,0);assert.equal(b.hypotheses.length,0);assert.equal((await req('feedback','bob','POST',{hypothesisId:a.hypotheses[0].id,kind:'wrong',note:'x'})).status,404);assert.equal((await req('export','bob')).body.messages.length,0);await req('data','bob','DELETE',{confirm:'DELETE MY DATA'});assert.equal((await req('me')).body.messages.length,2);});
-test('counter-evidence disputes earlier claims and contexts stay separate',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely at work.');await new Promise(r=>setTimeout(r,3));await send(req,'I am not lonely at work.');await send(req,'I feel lonely with my family.');const s=(await req('me')).body;assert.equal(s.hypotheses.find((h:any)=>h.parameter_id==='loneliness'&&h.scope==='work').status,'disputed');assert.equal(s.hypotheses.find((h:any)=>h.parameter_id==='loneliness'&&h.scope==='family').status,'candidate');});
-test('wrong interpretation and user change create different durable revision events',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely and anxious.');let s=(await req('me')).body;const first=s.hypotheses.find((h:any)=>h.parameter_id==='loneliness');assert.equal((await req('feedback','alice','POST',{hypothesisId:first.id,kind:'wrong',note:'This was an interpretation error.'})).status,200);s=(await req('me')).body;assert.ok(!s.hypotheses.some((h:any)=>h.id===first.id));const second=s.hypotheses.find((h:any)=>h.parameter_id==='anxiety');await req('feedback','alice','POST',{hypothesisId:second.id,kind:'changed',note:'Things are different now.'});s=(await req('me')).body;assert.ok(s.revisions.some((r:any)=>r.kind==='correction'));assert.ok(s.revisions.some((r:any)=>r.kind==='change'));});
-test('confirmations persist across unrelated turns',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely.');const h=(await req('me')).body.hypotheses[0];await req('feedback','alice','POST',{hypothesisId:h.id,kind:'confirm',note:''});await send(req,'I got good news about my project.');const current=(await req('me')).body.hypotheses.find((x:any)=>x.id===h.id);assert.equal(current.evidence_strength,'user_confirmed');});
+test('public connection settings contain no parameter catalog while private endpoints require sign-in',async()=>{const {req}=setup();assert.equal(Object.keys((await req('config','')).body).sort().join(','),'provider,providerConfigured');assert.equal((await req('health','')).status,200);for(const path of ['me','export'])assert.equal((await req(path,'')).status,401);assert.equal((await send(req,'I am happy.','')).status,401);});
+test('storage requires consent and cross-origin writes are rejected',async()=>{const {req}=setup();assert.equal((await send(req,'I feel sad.')).status,403);assert.equal((await req('consent','alice','POST',{accept:true},'https://attacker.test')).status,403);await consent(req);assert.equal((await modelState(req)).parameters.filter((p:any)=>p.estimate).length,0);});
+test('conversation persists messages, evidence, hypotheses and revisions; retry is idempotent',async()=>{const {req}=setup();await consent(req);const requestId=crypto.randomUUID();assert.equal((await send(req,'I feel anxious about work.', 'alice',requestId)).status,200);assert.equal((await send(req,'I feel anxious about work.', 'alice',requestId)).body.replayed,true);const s=(await modelState(req));assert.equal(s.messages.length,2);assert.ok(s.observations.some((o:any)=>o.parameter_id==='anxiety'));assert.ok(s.hypotheses.some((h:any)=>h.parameter_id==='anxiety'));assert.equal(s.revisions.length,1);assert.equal(s.profile.active_request,undefined);});
+test('duplicate source messages do not accumulate independent evidence',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely.');await send(req,'I feel lonely.');const s=(await modelState(req));assert.equal(s.observations.filter((o:any)=>o.parameter_id==='loneliness').length,1);});
+test('users cannot read, correct, export, or delete another person’s records',async()=>{const {req}=setup();await consent(req);await consent(req,'bob');await send(req,'I feel lonely today.');const a=(await modelState(req));const b=(await modelState(req,'bob'));assert.equal(b.messages.length,0);assert.equal(b.hypotheses.length,0);assert.equal((await internalFeedback(req,'bob','POST',{hypothesisId:a.hypotheses[0].id,kind:'wrong',note:'x'})).status,404);assert.equal((await req('export','bob')).body.messages.length,0);await req('data','bob','DELETE',{confirm:'DELETE MY DATA'});assert.equal((await modelState(req)).messages.length,2);});
+test('counter-evidence disputes earlier claims and contexts stay separate',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely at work.');await new Promise(r=>setTimeout(r,3));await send(req,'I am not lonely at work.');await send(req,'I feel lonely with my family.');const s=(await modelState(req));assert.equal(s.hypotheses.find((h:any)=>h.parameter_id==='loneliness'&&h.scope==='work').status,'disputed');assert.equal(s.hypotheses.find((h:any)=>h.parameter_id==='loneliness'&&h.scope==='family').status,'candidate');});
+test('wrong interpretation and user change create different durable revision events',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely and anxious.');let s=(await modelState(req));const first=s.hypotheses.find((h:any)=>h.parameter_id==='loneliness');assert.equal((await internalFeedback(req,'alice','POST',{hypothesisId:first.id,kind:'wrong',note:'This was an interpretation error.'})).status,200);s=(await modelState(req));assert.ok(!s.hypotheses.some((h:any)=>h.id===first.id));const second=s.hypotheses.find((h:any)=>h.parameter_id==='anxiety');await internalFeedback(req,'alice','POST',{hypothesisId:second.id,kind:'changed',note:'Things are different now.'});s=(await modelState(req));assert.ok(s.revisions.some((r:any)=>r.kind==='correction'));assert.ok(s.revisions.some((r:any)=>r.kind==='change'));});
+test('confirmations persist across unrelated turns',async()=>{const {req}=setup();await consent(req);await send(req,'I feel lonely.');const h=(await modelState(req)).hypotheses[0];await internalFeedback(req,'alice','POST',{hypothesisId:h.id,kind:'confirm',note:''});await send(req,'I got good news about my project.');const current=(await modelState(req)).hypotheses.find((x:any)=>x.id===h.id);assert.equal(current.evidence_strength,'user_confirmed');});
 test('deleting data removes all active records, including derived hypotheses and quotas',async()=>{const {req,db}=setup();await consent(req);await send(req,'I feel sad.');assert.equal((await req('data','alice','DELETE',{confirm:'WRONG'})).status,400);assert.equal((await req('data','alice','DELETE',{confirm:'DELETE MY DATA'})).status,200);for(const table of ['profiles','messages','observations','hypotheses','feedback','revisions','quotas'])assert.equal((db.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE user_id=?`).get('alice') as any).n,0);});
-test('active turn lock prevents conflicting updates and daily quota is enforced',async()=>{const {req,db}=setup();await consent(req);db.db.prepare('UPDATE profiles SET active_request=?,locked_at=? WHERE user_id=?').run('other',new Date().toISOString(),'alice');assert.equal((await send(req,'I feel sad.')).status,409);db.db.prepare('UPDATE profiles SET active_request=NULL WHERE user_id=?').run('alice');db.db.prepare('INSERT INTO quotas(user_id,day,count) VALUES(?,?,80)').run('alice',new Date().toISOString().slice(0,10));assert.equal((await send(req,'I feel sad.')).status,429);assert.equal((await req('me')).body.messages.length,0);});
-test('external provider is opt-in and structured output is validated before persistence',async()=>{const {req,env}=setup();env.GEMINI_API_KEY='unit-test-key';env.GEMINI_MODEL='test-model';await consent(req);assert.equal((await req('me')).body.profile.llm_consent,0);const mock:any=async(url:string,options:any)=>{assert.match(url,/generativelanguage.googleapis.com/);const body=JSON.parse(options.body);assert.equal(body.generationConfig.responseMimeType,'application/json');return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({reply:'Let’s take it one step at a time.',observations:[{parameterId:'anxiety',quote:'I feel anxious.',value:'Anxiety expressed',direction:'support',scope:'general',timeframe:'current',intensity:null},{parameterId:'cortisol',quote:'I feel anxious.',value:'High cortisol',direction:'support',scope:'general',timeframe:'current',intensity:9}]})}]}}]});};const r=await callProvider(env,'I feel anxious.',[],[],mock);assert.equal(r.observations.length,1);assert.equal(r.observations[0].parameterId,'anxiety');});
-test('provider failure produces a visibly labeled local ML fallback',async()=>{const {req,env}=setup();env.GEMINI_API_KEY='unit-test-key';env.GEMINI_MODEL='test-model';await consent(req);await req('provider-consent','alice','POST',{enabled:true});const r=await handleApi(new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'I feel anxious.',requestId:crypto.randomUUID()})}),env,async()=>new Response('',{status:503}));assert.equal(r.status,200);const s=(await req('me')).body;assert.match(s.messages[1].model,/goemotions/);assert.equal(s.messages[1].trace.warnings.length,1);});
+test('active turn lock prevents conflicting updates and daily quota is enforced',async()=>{const {req,db}=setup();await consent(req);db.db.prepare('UPDATE profiles SET active_request=?,locked_at=? WHERE user_id=?').run('other',new Date().toISOString(),'alice');assert.equal((await send(req,'I feel sad.')).status,409);db.db.prepare('UPDATE profiles SET active_request=NULL WHERE user_id=?').run('alice');db.db.prepare('INSERT INTO quotas(user_id,day,count) VALUES(?,?,80)').run('alice',new Date().toISOString().slice(0,10));assert.equal((await send(req,'I feel sad.')).status,429);assert.equal((await modelState(req)).messages.length,0);});
+test('external provider is opt-in and structured output is validated before persistence',async()=>{const {req,env}=setup();env.GEMINI_API_KEY='unit-test-key';env.GEMINI_MODEL='test-model';await consent(req);assert.equal((await modelState(req)).profile.llm_consent,0);const mock:any=async(url:string,options:any)=>{assert.match(url,/generativelanguage.googleapis.com/);const body=JSON.parse(options.body);assert.equal(body.generationConfig.responseMimeType,'application/json');return Response.json({candidates:[{content:{parts:[{text:JSON.stringify({reply:'Let’s take it one step at a time.',observations:[{parameterId:'anxiety',quote:'I feel anxious.',value:'Anxiety expressed',direction:'support',scope:'general',timeframe:'current',intensity:null},{parameterId:'cortisol',quote:'I feel anxious.',value:'High cortisol',direction:'support',scope:'general',timeframe:'current',intensity:9}]})}]}}]});};const r=await callProvider(env,'I feel anxious.',[],[],mock);assert.equal(r.observations.length,1);assert.equal(r.observations[0].parameterId,'anxiety');});
+test('provider failure produces a visibly labeled local ML fallback',async()=>{const {req,env}=setup();env.GEMINI_API_KEY='unit-test-key';env.GEMINI_MODEL='test-model';await consent(req);await req('provider-consent','alice','POST',{enabled:true});const r=await handleApi(new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'I feel anxious.',requestId:crypto.randomUUID()})}),env,async()=>new Response('',{status:503}));assert.equal(r.status,200);const s=(await modelState(req));assert.match(s.messages[1].model,/goemotions/);assert.equal(s.messages[1].trace.warnings.length,1);});
 test('Groq strict structured output uses the matching provider and validates evidence',async()=>{
  const {providerInfo}=await import('../server/provider');const env={AI_PROVIDER:'groq',GROQ_API_KEY:'unit-test-key',GROQ_MODEL:'openai/gpt-oss-20b'};
  assert.deepEqual(providerInfo(env),{id:'groq',name:'Groq',model:'openai/gpt-oss-20b'});
@@ -59,7 +63,7 @@ test('Groq strict structured output uses the matching provider and validates evi
 test('unknown provider does not send the key to another service',async()=>{let called=false;await assert.rejects(()=>callProvider({AI_PROVIDER:'xai',GROQ_API_KEY:'unit-test-key',GROQ_MODEL:'a-model'},'Hi',[],[],async()=>{called=true;return Response.json({});}),/provider_not_configured/);assert.equal(called,false);});
 test('Groq does not receive user data until the user opts in',async()=>{
  const {req,env}=setup();Object.assign(env,{AI_PROVIDER:'groq',GROQ_API_KEY:'unit-test-key',GROQ_MODEL:'openai/gpt-oss-20b'});await consent(req);let called=false;
- const response=await handleApi(new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'I feel anxious.',requestId:crypto.randomUUID()})}),env,async()=>{called=true;return Response.json({});});assert.equal(response.status,200);assert.equal(called,false);assert.equal((await req('catalog','')).body.provider.name,'Groq');
+ const response=await handleApi(new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'I feel anxious.',requestId:crypto.randomUUID()})}),env,async()=>{called=true;return Response.json({});});assert.equal(response.status,200);assert.equal(called,false);assert.equal((await req('config','')).body.provider.name,'Groq');
 });
 
 function seedMessages(db:TestD1,user:string,count:number){
@@ -68,7 +72,7 @@ function seedMessages(db:TestD1,user:string,count:number){
 }
 test('history uses stable keyset pagination for tied timestamps and never crosses accounts',async()=>{
  const {req,db}=setup();await consent(req);await consent(req,'bob');seedMessages(db,'alice',105);seedMessages(db,'bob',9);
- const state=(await req('me')).body;assert.equal(state.messages.length,40);let cursor=state.messageCursor;const ids=state.messages.map((m:any)=>m.id);
+ const state=(await modelState(req));assert.equal(state.messages.length,40);let cursor=state.messageCursor;const ids=state.messages.map((m:any)=>m.id);
  while(cursor){const page=(await req('messages?before='+encodeURIComponent(cursor))).body;ids.push(...page.messages.map((m:any)=>m.id));cursor=page.nextCursor;}
  assert.equal(ids.length,105);assert.equal(new Set(ids).size,105);assert.ok(ids.every((v:string)=>v.includes('alice')));
  assert.equal((await req('messages?before=garbage')).status,400);
@@ -85,7 +89,7 @@ test('exports detect concurrent changes instead of producing mixed revisions',as
 });
 test('paused memory refuses conversation but preserves reads, export and resume',async()=>{
  const {req}=setup();await consent(req);await send(req,'I feel calm.');assert.equal((await req('memory','alice','POST',{paused:true})).status,200);
- assert.equal((await send(req,'I feel lonely.')).status,403);assert.equal((await req('me')).body.messages.length,2);assert.equal((await req('export')).body.messages.length,2);
+ assert.equal((await send(req,'I feel lonely.')).status,403);assert.equal((await modelState(req)).messages.length,2);assert.equal((await req('export')).body.messages.length,2);
  await req('memory','alice','POST',{paused:false});assert.equal((await send(req,'I feel happy.')).status,200);
 });
 test('burst limits persist atomically and retries of completed requests consume no extra allowance',async()=>{
@@ -96,14 +100,14 @@ test('burst limits persist atomically and retries of completed requests consume 
 test('deleting and re-enabling memory cannot reset the daily allowance',async()=>{
  const {req,env,db}=setup();env.USER_DAILY_MESSAGE_LIMIT='2';await consent(req);await send(req,'I feel calm.');await send(req,'I feel happy.');
  await req('data','alice','DELETE',{confirm:'DELETE MY DATA'});await consent(req);
- assert.equal((await send(req,'I feel sad.')).status,429);assert.equal((await req('me')).body.usage.used,2);
+ assert.equal((await send(req,'I feel sad.')).status,429);assert.equal((await modelState(req)).usage.used,2);
  const keys=db.db.prepare('SELECT id FROM usage_buckets').all().map((r:any)=>r.id);assert.ok(keys.every((key:string)=>!key.includes('alice')));
 });
 test('shared AI request and token budgets prevent calls while preserving a labeled local fallback',async()=>{
  const {req,env}=setup();Object.assign(env,{AI_PROVIDER:'groq',GROQ_API_KEY:'test-key',GROQ_MODEL:'test',AI_DAILY_REQUEST_LIMIT:'1'});await consent(req);await req('provider-consent','alice','POST',{enabled:true});let calls=0;
  const mock:any=async()=>{calls++;return Response.json({choices:[{message:{content:JSON.stringify({reply:'A useful response.',observations:[]})}}]});};
  const request=()=>new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'I feel calm.',requestId:crypto.randomUUID()})});
- await handleApi(request(),env,mock);await handleApi(request(),env,mock);assert.equal(calls,1);assert.ok((await req('me')).body.messages.at(-1).trace.warnings[0].includes('shared usage limit'));
+ await handleApi(request(),env,mock);await handleApi(request(),env,mock);assert.equal(calls,1);assert.ok((await modelState(req)).messages.at(-1).trace.warnings[0].includes('shared usage limit'));
  env.AI_DAILY_TOKEN_BUDGET='1';await handleApi(request(),env,mock);assert.equal(calls,1);
 });
 test('provider failures open the circuit and the kill switch prevents outbound requests',async()=>{
@@ -111,7 +115,7 @@ test('provider failures open the circuit and the kill switch prevents outbound r
  const request=()=>new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'I feel calm.',requestId:crypto.randomUUID()})});
  const mock:any=async()=>{calls++;return new Response('',{status:503});};
  for(let i=0;i<4;i++)await handleApi(request(),env,mock);assert.equal(calls,3);
- env.AI_ENABLED='false';await handleApi(request(),env,mock);assert.equal(calls,3);assert.equal((await req('catalog','')).body.providerConfigured,false);
+ env.AI_ENABLED='false';await handleApi(request(),env,mock);assert.equal(calls,3);assert.equal((await req('config','')).body.providerConfigured,false);
 });
 test('malformed JSON, oversized multibyte bodies and unsupported methods fail safely',async()=>{
  const {req,env}=setup();for(const payload of [null,[],1,'string'])assert.equal((await req('consent','alice','POST',payload)).status,400);
@@ -125,22 +129,22 @@ test('operator metrics require a separate secret and contain no conversation or 
  const logs=requestLogs.join(' ');assert.ok(!logs.includes('secret sentence'));assert.ok(!logs.includes('alice'));assert.ok(!logs.includes(env.OPS_TOKEN));
 });
 test('old evidence is still inspectable through a hypothesis and cannot leak to another user',async()=>{
- const {req}=setup();await consent(req);await consent(req,'bob');await send(req,'I feel lonely.');const h=(await req('me')).body.hypotheses[0];
+ const {req}=setup();await consent(req);await consent(req,'bob');await send(req,'I feel lonely.');const h=(await modelState(req)).hypotheses[0];
  assert.ok((await req('evidence?hypothesis='+h.id)).body.observations.length>0);assert.equal((await req('evidence?hypothesis='+h.id,'bob')).status,404);
 });
 test('failed atomic writes persist no partial conversation and release the user lock',async()=>{
  const {req,env,db}=setup();await consent(req);const realBatch=env.DB.batch.bind(env.DB);let rejectOnce=true;
  env.DB.batch=async(statements:any[])=>{if(rejectOnce&&statements.length>3){rejectOnce=false;throw new Error('synthetic_db_failure');}return realBatch(statements);};
- assert.equal((await send(req,'I feel lonely.')).status,500);assert.equal((await req('me')).body.messages.length,0);assert.equal((db.db.prepare('SELECT active_request FROM profiles').get() as any).active_request,null);
+ assert.equal((await send(req,'I feel lonely.')).status,500);assert.equal((await modelState(req)).messages.length,0);assert.equal((db.db.prepare('SELECT active_request FROM profiles').get() as any).active_request,null);
  assert.equal((await send(req,'I feel lonely.')).status,200);
 });
 test('an account export restores into a clean synthetic database with evidence links intact',async()=>{
- const {req,db}=setup();await consent(req);await send(req,'I feel anxious about work.');const before=(await req('me')).body;
+ const {req,db}=setup();await consent(req);await send(req,'I feel anxious about work.');const before=(await modelState(req));
  const snapshot=db.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();assert.ok(snapshot.length>=9);
  const exported=(await req('export')).body;const roundTrip=JSON.parse(JSON.stringify(exported));
  const restored=setup();await consent(restored.req);
  for(const table of ['messages','observations','hypotheses','feedback','revisions'])for(const row of roundTrip[table]){const keys=Object.keys(row);restored.db.db.prepare(`INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map(()=>'?').join(',')})`).run(...keys.map(key=>row[key]));}
- const after=(await restored.req('me')).body;assert.equal(after.messages.length,before.messages.length);assert.equal(after.observations.length,before.observations.length);assert.equal(after.hypotheses[0].claim,before.hypotheses[0].claim);
+ const after=(await modelState(restored.req));assert.equal(after.messages.length,before.messages.length);assert.equal(after.observations.length,before.observations.length);assert.equal(after.hypotheses[0].claim,before.hypotheses[0].claim);
 });
 
 test('shared conversation limits apply across different authenticated users',async()=>{
@@ -153,8 +157,88 @@ test('daily export manifests never expose internal operational tables or accept 
  const {req}=setup();await consent(req);assert.equal((await req('export?table=usage_buckets&revision=0')).status,400);assert.equal((await req('export?table=messages;DROP&revision=0')).status,400);assert.equal((await req('export?table=messages&revision=99')).status,409);
 });
 test('large feedback and hypothesis updates stay within a bounded statement count',async()=>{
- const {req,db,env}=setup();await consent(req);await send(req,'I feel lonely.');const state=(await req('me')).body;const h=state.hypotheses[0];const ids=[];
+ const {req,db,env}=setup();await consent(req);await send(req,'I feel lonely.');const state=(await modelState(req));const h=state.hypotheses[0];const ids=[];
  for(let i=0;i<180;i++){const oid='observation-'+i;ids.push(oid);db.db.prepare('INSERT INTO observations(id,user_id,message_id,parameter_id,quote,value,direction,scope,timeframe,source,strength,intensity,episode_key,retracted,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)').run(oid,'alice',state.messages[0].id,'loneliness','I feel lonely.','Loneliness expressed','support','general','current','explicit','explicit',null,'episode'+i,new Date().toISOString());}
  db.db.prepare('UPDATE hypotheses SET support_ids=? WHERE id=?').run(JSON.stringify(ids),h.id);let max=0;const batch=env.DB.batch.bind(env.DB);env.DB.batch=async(rows:any[])=>{max=Math.max(max,rows.length);return batch(rows);};
- assert.equal((await req('feedback','alice','POST',{hypothesisId:h.id,kind:'wrong',note:''})).status,200);assert.ok(max<10);assert.equal((db.db.prepare("SELECT count(*) AS n FROM observations WHERE id LIKE 'observation-%' AND retracted=1").get() as any).n,180);
+ assert.equal((await internalFeedback(req,'alice','POST',{hypothesisId:h.id,kind:'wrong',note:''})).status,200);assert.ok(max<10);assert.equal((db.db.prepare("SELECT count(*) AS n FROM observations WHERE id LIKE 'observation-%' AND retracted=1").get() as any).n,180);
+});
+
+test('ordinary API responses contain no parameters, hypotheses, evidence, traces or model scores',async()=>{
+ const {req}=setup();await consent(req);await send(req,'I feel anxious about work.');
+ const state=(await req('me')).body;
+ for(const key of ['parameters','hypotheses','observations','revisions'])assert.equal(state[key],undefined);
+ assert.equal(state.profile.user_id,undefined);
+ for(const message of state.messages){assert.equal(message.trace,undefined);assert.equal(message.model,undefined);}
+ const page=(await req('messages')).body;assert.equal(page.messages[1].trace,undefined);
+ assert.equal((await req('catalog','')).status,404);
+ assert.equal((await req('evidence?hypothesis=anything')).status,404);
+ assert.equal((await req('feedback','alice','POST',{})).status,404);
+ const configuration=(await req('config','')).body;assert.equal(configuration.parameters,undefined);assert.equal(configuration.modelCard,undefined);
+ const internal=await req.internalState();assert.ok(internal.hypotheses.length>0);
+});
+test('current emotions and historical memories occupy separate hypotheses',()=>{
+ const rows=[
+ {id:'current',parameter_id:'loneliness',scope:'general',episode_key:'old-current',direction:'support',timeframe:'current',source:'explicit',created_at:'2025-01-01T00:00:00.000Z',value:'I feel lonely.',intensity:2},
+ {id:'past',parameter_id:'loneliness',scope:'general',episode_key:'college-memory',direction:'support',timeframe:'past',source:'explicit',created_at:'2026-10-20T00:00:00.000Z',value:'I used to feel lonely in college.',intensity:8}];
+ const result=buildHypotheses(rows,new Date('2026-10-20T00:00:00.000Z'));
+ assert.equal(result.length,2);assert.equal(result.find(h=>h.status==='historical')?.intensity,8);
+ const current=result.find(h=>h.status!=='historical');assert.ok(current);assert.equal(current.intensity,2);assert.equal(current.relevance,0);
+});
+test('an exact quote does not authorize an unrelated emotional interpretation or invented cause',()=>{
+ const quote='I like to plan ahead.';
+ const observation={parameterId:'anxiety',quote,value:'Anxiety expressed',direction:'support',scope:'general',timeframe:'current',intensity:null};
+ assert.equal(validateObservations([observation],quote).length,0);
+ const text='I am not anxious now.';
+ const accepted=validateObservations([{...observation,quote:text,value:'An invented cause'}],text);
+ assert.equal(accepted[0].direction,'counter');assert.equal(accepted[0].value,text);
+});
+test('distinct long and non-Latin messages do not share truncated duplicate keys',async()=>{
+ const {episodeKey}=await import('../server/inference');
+ const prefix='I am describing my day in detail. '.repeat(10);
+ assert.notEqual(episodeKey(prefix+'I got promoted.'),episodeKey(prefix+'I lost my job.'));
+ assert.notEqual(episodeKey('मुझे चिंता है'),episodeKey('मैं खुश हूँ'));
+});
+test('a changed preference preserves historical evidence while a wrong inference retracts evidence',async()=>{
+ const {req}=setup();await consent(req);await send(req,'I prefer planning at work.');
+ let state=await modelState(req);const original=state.hypotheses.find((h:any)=>h.parameter_id==='planning_preference');
+ await internalFeedback(req,'alice','POST',{hypothesisId:original.id,kind:'changed',note:'Things have changed.'});
+ state=await modelState(req);const observation=state.observations.find((o:any)=>o.parameter_id==='planning_preference');
+ assert.equal(observation.retracted,0);assert.equal(observation.timeframe,'past');
+ await send(req,'I feel anxious.');state=await modelState(req);const h=state.hypotheses.find((h:any)=>h.parameter_id==='anxiety');
+ await internalFeedback(req,'alice','POST',{hypothesisId:h.id,kind:'wrong',note:'Incorrect.'});
+ state=await modelState(req);assert.equal(state.observations.find((o:any)=>o.parameter_id==='anxiety').retracted,1);
+});
+test('natural corrections target the referenced reply without exposing internal IDs',async()=>{
+ const {req,env}=setup();await consent(req);await send(req,'I feel anxious.');
+ const state=(await req('me')).body;const messageId=state.messages.find((m:any)=>m.role==='assistant').id;
+ const result=await handleApi(new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'That wasn’t right. I was describing someone else.',requestId:crypto.randomUUID(),replyToMessageId:messageId})}),env);
+ assert.equal(result.status,200);const internal=await modelState(req);
+ assert.ok(internal.revisions.some((r:any)=>r.kind==='correction'));
+ assert.equal(internal.observations.find((o:any)=>o.parameter_id==='anxiety').retracted,1);
+ assert.equal(correctionKind('That wasn’t right.'),'wrong');
+});
+test('reply references cannot cross account boundaries',async()=>{
+ const {req,env}=setup();await consent(req);await consent(req,'bob');await send(req,'I feel anxious.','bob');
+ const id=(await req('me','bob')).body.messages.find((m:any)=>m.role==='assistant').id;
+ const response=await handleApi(new Request('https://humanos.test/api/messages',{method:'POST',headers:{origin:'https://humanos.test','content-type':'application/json','oai-authenticated-user-id':'alice'},body:JSON.stringify({text:'That was wrong.',requestId:crypto.randomUUID(),replyToMessageId:id})}),env);
+ assert.equal(response.status,404);
+});
+test('stored preferences participate in retrieval and explicit response defaults',()=>{
+ const old=[{id:'old',parameter_id:'direct_feedback',scope:'general',claim:'Possible preference.',latest_quote:'Be direct and be honest with me.',status:'candidate',evidence_strength:'user_confirmed',support_ids:'[]',counter_ids:'[]',valid_from:'2025-01-01T00:00:00.000Z'}];
+ const memory=selectMemory('Help me decide.',old);assert.equal(memory[0].id,'old');
+ assert.equal(responsePolicy('Help me decide.',memory).directness,'direct');
+ assert.equal(responsePolicy('Please be gentle. Just listen, no advice.',memory).directness,'warm');
+ assert.equal(responsePolicy('Please be gentle. Just listen, no advice.',memory).advice,'listen_only');
+});
+test('safe message serialization uses an allowlist',()=>{
+ const result=publicMessage({id:'one',role:'assistant',content:'Hello',created_at:'now',model:'groq:test',trace:{classification:[1],observations:[1]},hypotheses:[1],secret:'never'});
+ assert.deepEqual(Object.keys(result).sort(),['content','created_at','id','responseMode','role'].sort());
+ assert.equal(result.responseMode,'ai');
+});
+
+test('main interface renders conversation and privacy without inference dashboards',async()=>{
+ const {createElement}=await import('react');const {renderToStaticMarkup}=await import('react-dom/server');const {default:HumanOS}=await import('../app/HumanOS');
+ const html=renderToStaticMarkup(createElement(HumanOS,{displayName:null}));
+ assert.ok(html.includes('Conversation'));assert.ok(html.includes('Data &amp; privacy'));
+ for(const term of ['Your patterns','Hypotheses','Behind the model','parameters observed','Inside this response'])assert.ok(!html.includes(term));
 });

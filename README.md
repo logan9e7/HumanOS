@@ -8,12 +8,12 @@ See [release and operations](docs/PRODUCTION.md) for release checks, runtime lim
 
 - Dispatch-owned ChatGPT sign-in; user IDs are read from Sites-injected request headers.
 - Per-user messages, observations, hypotheses, feedback and revision records in D1.
-- A 50-parameter catalog; unknown values stay unknown.
+- A backend-only 50-parameter catalog; unknown values stay unknown. The normal client receives no parameter catalog, hypothesis rows, evidence links, traces or scores.
 - Trained CPU-only GoEmotions classifier with server-side weights, plus conservative explicit-signal extraction.
 - Exact conversation quotes and message IDs for observations; negation is counter-evidence.
 - Historical experiences remain historical; work, family and social contexts are separate.
-- Provisional hypotheses with supporting evidence, counter-evidence and alternative interpretations.
-- Distinct feedback for an incorrect interpretation versus a user who has changed.
+- Internal provisional hypotheses with supporting evidence, counter-evidence and alternative interpretations. The user interface focuses on conversation and privacy controls.
+- Distinct feedback for an incorrect interpretation versus a user who has changed. Natural corrections can reference a reply using its message ID; ambiguous targets ask for clarification. Changed preferences preserve past evidence.
 - Time-dependent relevance, duplicate-evidence suppression, and transparent model labels.
 - Full paginated data export without a per-table cutoff, cursor-based history, memory pause/resume and deletion from the active database.
 - Public privacy/terms pages and a dedicated Data & privacy section.
@@ -25,7 +25,7 @@ See [release and operations](docs/PRODUCTION.md) for release checks, runtime lim
 
 The site uses the supplied Vinext/React/Cloudflare Workers server runtime with Sites-provisioned D1. No separate Render, Neon, Supabase or model service was provisioned. The baseline classifier has no per-request external API cost. Sites access/hosting remains subject to the user's existing platform terms and quotas.
 
-The public site can be loaded anonymously. `/api/catalog` and `/api/health` are public. All user data endpoints require the stable Sites-authenticated user ID, and every query includes that user ID. Caller-supplied body IDs never establish identity. Cross-origin mutations are rejected. D1 migrations run through Sites before the Worker is deployed. No schema is created during requests.
+The public site can be loaded anonymously. `/api/config` exposes only provider availability/name and `/api/health` is public. The old catalog, evidence and technical feedback endpoints return 404. All user data endpoints require the stable Sites-authenticated user ID, and every query includes that user ID. Caller-supplied body IDs never establish identity. Cross-origin mutations are rejected. D1 migrations run through Sites before the Worker is deployed. No schema is created during requests.
 
 ## Exact AI status
 
@@ -34,6 +34,8 @@ The public site can be loaded anonymously. `/api/catalog` and `/api/health` are 
 **Fallback replies:** authored templates chosen from the supported context when external processing is off or a provider request fails. Each message identifies its actual model or baseline.
 
 **Configured provider:** Groq, using `openai/gpt-oss-20b`. The key is stored only as a secret in Sites runtime settings. A real synthetic-input request through `server/provider.ts` returned a valid reply and a grounded anxiety observation. The key is never included in this repository, frontend bundle, model artifact, documentation, or logs.
+
+The 1.1.0 repository update is pending Sites publication while its execution environment is unavailable. GitHub CI validates source independently; the deployed app may still be on 1.0.0.
 
 Each signed-in user explicitly enables external processing. The provider receives the current message, up to eight recent messages (each capped at 1,500 characters), and up to eight provisional hypotheses. This choice is visible directly above the conversation and can be disabled under Behind the model. No private conversation is used to retrain the baseline.
 
@@ -119,7 +121,7 @@ Mutations use a per-user D1 lock with a stale-lock deadline. Provider calls have
 - `server/api.ts`: auth boundaries, limits, D1 operations, corrections, exports and deletion.
 - `app/api/[...path]/route.ts`: hosted server route.
 - `db/schema.ts`, `drizzle/`: database definitions and migration history.
-- `app/HumanOS.tsx`: connected chat, 50-parameter explorer, hypothesis/evidence/revision views and data controls.
+- `app/HumanOS.tsx`: conversation and privacy controls, with inference kept server-side.
 - `tests/backend.test.ts`: integration tests against real in-memory SQLite implementing the D1 interface.
 - `ai/training/train.py`, `ai/models/`: reproducible training and real learned model artifacts.
 
@@ -135,3 +137,9 @@ The expanded backend suite covers model parity, unknowns, attribution, negation,
 Build through the Sites helper; retain the `sites()` integration in `vite.config.ts`. Browser/visual QA is unavailable because the managed control-browser skill is not installed. No actual browser-flow verification is claimed. Anonymous live HTTP health/auth checks and native D1 provisioning checks should be performed after deployment.
 
 The earlier Mira character sandbox exists in Git history. Its device-local fictional world is not silently imported into this human profile; it is not evidence about the user.
+
+## Internal-model boundary (1.1.0)
+
+Ordinary `/api/me` and history responses use explicit allowlists. Inference diagnostics remain in D1 and the server. A deliberate account data export still includes the user's derived records. The main interface has Conversation and Data & privacy only, including the ability to correct an earlier reply in plain language.
+
+Past/current evidence is grouped separately; duplicate keys retain the full normalized Unicode message. Provider observations abstain without a reviewed semantic cue and derive polarity/context/time from the quote. This is a conservative precision/coverage tradeoff, not a general semantic-entailment guarantee. Response defaults use selected persisted memory and explicit user requests. Selection currently uses lexical overlap and stable-preference weighting, not vector search or a trained personality model.

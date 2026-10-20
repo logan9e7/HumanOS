@@ -3,6 +3,8 @@ import {extractBaseline,buildHypotheses,episodeKey,baselineReply} from './infere
 import {MODEL_CARD} from './classifier';
 import {callProvider,providerReady,providerInfo,type ModelEnvironment} from './provider';
 import {messagePage,exportPage} from './history';
+import {publicMessage,publicProfile,publicProvider} from './client-state';
+import {selectMemory,responsePolicy,correctionKind,correctionTargets,feedbackStatements} from './memory';
 import {positiveLimit,userUsageKey,reserve,reserveProvider,recordProviderFailure,housekeeping,recordMetric,validOpsToken,type OperationalEnvironment} from './operations';
 export type Environment=ModelEnvironment&OperationalEnvironment&{DB:D1Database};
 const headers={'content-type':'application/json; charset=utf-8','cache-control':'private, no-store','x-content-type-options':'nosniff'};
@@ -42,7 +44,7 @@ async function withLock(db:D1Database,user:string,callback:(token:string)=>Promi
 function hypothesisStatements(db:D1Database,user:string,rows:any[],old:any[],time:string,revision:number){
  const fresh=buildHypotheses(rows,new Date(time)),retired:string[]=[],inserts:any[]=[];
  for(const h of fresh){
-  const previous=old.find(x=>x.parameter_id===h.parameterId&&x.scope===h.scope&&!x.superseded_at);
+  const previous=old.find(x=>x.parameter_id===h.parameterId&&x.scope===h.scope&&!x.superseded_at&&(x.status==='historical')===(h.status==='historical'));
   if(previous?.evidence_strength==='user_confirmed'&&h.status!=='disputed'&&JSON.stringify(JSON.parse(previous.support_ids))===JSON.stringify(h.supportIds)&&JSON.stringify(JSON.parse(previous.counter_ids))===JSON.stringify(h.counterIds))h.evidenceStrength='user_confirmed';
   const signature=JSON.stringify([h.claim,h.status,h.evidenceStrength,h.supportIds,h.counterIds]);
   if(previous&&JSON.stringify([previous.claim,previous.status,previous.evidence_strength,JSON.parse(previous.support_ids),JSON.parse(previous.counter_ids)])===signature)continue;
@@ -57,7 +59,7 @@ function hypothesisStatements(db:D1Database,user:string,rows:any[],old:any[],tim
 async function routeApi(request:Request,env:Environment,fetcher:typeof fetch=fetch):Promise<Response>{
  try{
   const url=new URL(request.url),path=url.pathname;
-  const methods:Record<string,string[]>={'/api/health':['GET'],'/api/catalog':['GET'],'/api/me':['GET'],'/api/consent':['POST'],'/api/provider-consent':['POST'],'/api/memory':['POST'],'/api/messages':['GET','POST'],'/api/evidence':['GET'],'/api/feedback':['POST'],'/api/export':['GET'],'/api/data':['DELETE'],'/api/ops/metrics':['GET']};
+  const methods:Record<string,string[]>={'/api/health':['GET'],'/api/config':['GET'],'/api/me':['GET'],'/api/consent':['POST'],'/api/provider-consent':['POST'],'/api/memory':['POST'],'/api/messages':['GET','POST'],'/api/export':['GET'],'/api/data':['DELETE'],'/api/ops/metrics':['GET']};
   if(!methods[path])return json({error:'Not found.'},404);
   if(!methods[path].includes(request.method))return new Response(JSON.stringify({error:'Method not allowed.'}),{status:405,headers:{...headers,allow:methods[path].join(', ')}});
   if(path==='/api/ops/metrics'){
@@ -67,19 +69,19 @@ async function routeApi(request:Request,env:Environment,fetcher:typeof fetch=fet
    return json({metrics,providerUsage:usage,aiEnabled:env.AI_ENABLED!=='false'});
   }
   if(path==='/api/health'){
-   if(!env.DB)return json({status:'degraded',database:'unavailable',parameterCount:50},503);
+   if(!env.DB)return json({status:'degraded',database:'unavailable',release:'1.1.0'},503);
    if(!env.USAGE_HASH_KEY||env.USAGE_HASH_KEY.length<32||!env.OPS_TOKEN||env.OPS_TOKEN.length<32)return json({status:'degraded',database:'D1',operations:'not_configured'},503);
    await env.DB.prepare('SELECT memory_paused,consent_version FROM profiles LIMIT 1').all();
    await env.DB.prepare('SELECT id FROM usage_buckets LIMIT 1').all();
-   return json({status:'ok',database:'D1',parameterCount:PARAMETERS.length,catalog:CATALOG_VERSION,inference:MODEL_CARD.version,release:'1.0.0',neuralDialogue:providerReady(env)&&env.AI_ENABLED!=='false'?'configured':'not_configured',provider:providerInfo(env)});
+   return json({status:'ok',database:'D1',release:'1.1.0',neuralDialogue:providerReady(env)&&env.AI_ENABLED!=='false'?'configured':'not_configured',provider:publicProvider(providerInfo(env))});
   }
-  if(path==='/api/catalog'&&request.method==='GET')return json({version:CATALOG_VERSION,parameters:PARAMETERS,modelCard:MODEL_CARD,providerConfigured:providerReady(env)&&env.AI_ENABLED!=='false',provider:providerInfo(env)});
+  if(path==='/api/config'&&request.method==='GET')return json({providerConfigured:providerReady(env)&&env.AI_ENABLED!=='false',provider:publicProvider(providerInfo(env))});
   const user=request.headers.get('oai-authenticated-user-id');
   if(!user)return json({error:'Sign in to access your private conversation and profile.',code:'sign_in_required'},401);
   if(!env.DB)return json({error:'Database unavailable. No conversation was stored.'},503);
   if(request.headers.get('sec-fetch-site')==='cross-site')throw new HttpError(403,'Open private data from HumanOS.');
   if(path==='/api/me'&&request.method==='GET'){
-   const state=await loadState(env.DB,user);const usage:any=await env.DB.prepare('SELECT count FROM quotas WHERE user_id=? AND day=?').bind(user,now().slice(0,10)).first();const usageHash=env.USAGE_HASH_KEY?await userUsageKey(env,user):null;const protectedUsage:any=usageHash?await env.DB.prepare('SELECT count FROM usage_buckets WHERE id=?').bind(`day:${usageHash}:${now().slice(0,10)}`).first():null;return json({...state,signedIn:true,usage:{used:Math.max(usage?.count||0,protectedUsage?.count||0),limit:positiveLimit(env.USER_DAILY_MESSAGE_LIMIT,80,1000)},providerConfigured:providerReady(env)&&env.AI_ENABLED!=='false',provider:providerInfo(env)});
+   const [profile,page]=await Promise.all([env.DB.prepare('SELECT llm_consent,memory_paused,consent_version FROM profiles WHERE user_id=?').bind(user).first(),messagePage(env.DB,user)]);const state={profile:publicProfile(profile),messages:page.messages.map(publicMessage),messageCursor:page.nextCursor};const usage:any=await env.DB.prepare('SELECT count FROM quotas WHERE user_id=? AND day=?').bind(user,now().slice(0,10)).first();const usageHash=env.USAGE_HASH_KEY?await userUsageKey(env,user):null;const protectedUsage:any=usageHash?await env.DB.prepare('SELECT count FROM usage_buckets WHERE id=?').bind(`day:${usageHash}:${now().slice(0,10)}`).first():null;return json({...state,signedIn:true,usage:{used:Math.max(usage?.count||0,protectedUsage?.count||0),limit:positiveLimit(env.USER_DAILY_MESSAGE_LIMIT,80,1000)},providerConfigured:providerReady(env)&&env.AI_ENABLED!=='false',provider:publicProvider(providerInfo(env))});
   }
   if(path==='/api/consent'&&request.method==='POST'){
    const b=await body(request);if(b.accept!==true)throw new HttpError(400,'Confirm private conversation storage to continue.');
@@ -87,16 +89,7 @@ async function routeApi(request:Request,env:Environment,fetcher:typeof fetch=fet
   }
   const profile:any=await env.DB.prepare('SELECT * FROM profiles WHERE user_id=?').bind(user).first();if(!profile)throw new HttpError(403,'Enable private memory before continuing.');
   if(path==='/api/messages'&&request.method==='GET'){
-   try{return json(await messagePage(env.DB,user,url.searchParams.get('before')));}catch(e){if(e instanceof Error&&e.message==='invalid_cursor')throw new HttpError(400,'Invalid history cursor.');throw e;}
-  }
-  if(path==='/api/evidence'){
-   const hypothesis=url.searchParams.get('hypothesis');
-   if(!hypothesis||hypothesis.length>80)throw new HttpError(400,'Choose a hypothesis.');
-   const h:any=await env.DB.prepare('SELECT support_ids,counter_ids FROM hypotheses WHERE user_id=? AND id=?').bind(user,hypothesis).first();
-   if(!h)throw new HttpError(404,'Hypothesis not found.');
-   const ids:string[]=[...JSON.parse(h.support_ids),...JSON.parse(h.counter_ids)];const rows:any[]=[];
-   for(let start=0;start<ids.length;start+=80){const part=ids.slice(start,start+80);rows.push(...await all(env.DB,`SELECT * FROM observations WHERE user_id=? AND id IN (${part.map(()=>'?').join(',')})`,user,...part));}
-   return json({observations:rows});
+   try{const page=await messagePage(env.DB,user,url.searchParams.get('before'));return json({messages:page.messages.map(publicMessage),nextCursor:page.nextCursor});}catch(e){if(e instanceof Error&&e.message==='invalid_cursor')throw new HttpError(400,'Invalid history cursor.');throw e;}
   }
   if(path==='/api/memory'){
    const b=await body(request);if(typeof b.paused!=='boolean')throw new HttpError(400,'Choose whether to pause memory.');
@@ -122,11 +115,30 @@ async function routeApi(request:Request,env:Environment,fetcher:typeof fetch=fet
     if((legacy?.count||0)>=dailyLimit||!await reserve(env.DB,`day:${usageKey}:${day}`,dailyLimit,new Date(date.getTime()+172800000).toISOString()))throw new HttpError(429,'Your daily message allowance has been reached. Please return tomorrow.');
     await env.DB.prepare('INSERT INTO quotas (user_id,day,count) VALUES (?,?,1) ON CONFLICT(user_id,day) DO UPDATE SET count=count+1').bind(user,day).run();
     const current:any=await env.DB.prepare('SELECT * FROM profiles WHERE user_id=?').bind(user).first();
-    const old=await all(env.DB,'SELECT * FROM hypotheses WHERE user_id=? AND superseded_at IS NULL',user);
-    const evidence=await all(env.DB,'SELECT * FROM observations WHERE user_id=? ORDER BY created_at DESC LIMIT 600',user);
-    const baseline=extractBaseline(b.text),warnings:string[]=[];let result={observations:baseline.observations,reply:baselineReply(b.text,baseline.observations),model:baseline.model};
+    const old=await all(env.DB,"SELECT h.*,(SELECT quote FROM observations o WHERE o.user_id=h.user_id AND o.parameter_id=h.parameter_id AND o.scope=h.scope AND o.retracted=0 AND ((h.status='historical' AND o.timeframe='past') OR (h.status!='historical' AND o.timeframe!='past')) ORDER BY o.created_at DESC LIMIT 1) AS latest_quote FROM hypotheses h WHERE h.user_id=? AND h.superseded_at IS NULL",user);
+    let evidence=await all(env.DB,'SELECT * FROM observations WHERE user_id=? ORDER BY created_at DESC LIMIT 600',user);
+    const baseline=extractBaseline(b.text),warnings:string[]=[];
+    const memory=selectMemory(b.text,old),policy=responsePolicy(b.text,memory);
+    const kind=correctionKind(b.text);
+    let referenceIds:string[]=[];
+    if(b.replyToMessageId!==undefined){
+      if(typeof b.replyToMessageId!=='string'||b.replyToMessageId.length>80)throw new HttpError(400,'Choose a valid earlier reply.');
+      const reference:any=await env.DB.prepare("SELECT trace FROM messages WHERE user_id=? AND id=? AND role='assistant'").bind(user,b.replyToMessageId).first();
+      if(!reference)throw new HttpError(404,'That reply is not available in your conversation.');
+      referenceIds=(JSON.parse(reference.trace).observations||[]).map((o:any)=>o.id);
+    }
+    const possibleTargets=kind?correctionTargets(old,evidence,referenceIds,baseline.observations.map(o=>o.parameterId)):[];
+    const target=possibleTargets.length===1?possibleTargets[0]:null;
+    const correctionStatements:D1PreparedStatement[]=[];
+    if(kind&&target){
+      correctionStatements.push(...feedbackStatements(env.DB,user,target,kind,b.text,now()));
+      const affected=new Set([...JSON.parse(target.support_ids),...JSON.parse(target.counter_ids)]);
+      evidence=evidence.map(row=>!affected.has(row.id)?row:kind==='changed'?{...row,timeframe:'past'}:{...row,retracted:1});
+      target.superseded_at=now();
+    }else if(kind&&b.replyToMessageId)warnings.push('Please describe the specific part you want me to understand differently.');
+    let result={observations:baseline.observations,reply:baselineReply(b.text,baseline.observations),model:baseline.model};
     if(current.llm_consent&&providerReady(env)&&env.AI_ENABLED!=='false'){
-     try{const history=await all(env.DB,'SELECT role,content FROM messages WHERE user_id=? ORDER BY created_at DESC LIMIT 8',user);result=await callProvider(env,b.text,history.reverse(),buildHypotheses(evidence),fetcher,units=>reserveProvider(env.DB,env,units));}catch(e){
+     try{const history=await all(env.DB,'SELECT role,content FROM messages WHERE user_id=? ORDER BY created_at DESC LIMIT 8',user);result=await callProvider(env,b.text,history.reverse(),memory.filter(h=>h.id!==target?.id),fetcher,units=>reserveProvider(env.DB,env,units),responsePolicy(b.text,memory.filter(h=>h.id!==target?.id)));}catch(e){
       const limited=e instanceof Error&&e.message==='provider_budget_or_circuit_limit';
       console.warn(JSON.stringify({event:'provider_fallback',reason:limited?'usage_or_circuit_limit':'provider_failure'}));
       await recordMetric(env.DB,'provider_fallback',limited?429:503,0);
@@ -134,11 +146,12 @@ async function routeApi(request:Request,env:Environment,fetcher:typeof fetch=fet
       warnings.push(limited?'AI is temporarily at its shared usage limit or recovering from failures. The local ML baseline handled this turn.':'The external model did not return a usable response. The local ML baseline handled this turn.');
      }
     }
+    if(target&&kind&&!/^(groq|gemini):/.test(result.model))result.reply=kind==='changed'?'Thanks for letting me know things have changed. I’ll use that context going forward.':'Thanks for correcting me. I’ll use that clarification going forward.';
     const t=now(),userMessage=id(),assistantMessage=id(),revision=current.revision+1;
     const episode=episodeKey(b.text);const priorEpisode=await all(env.DB,'SELECT parameter_id,scope,direction FROM observations WHERE user_id=? AND episode_key=? AND retracted=0',user,episode);const seen=new Set<string>();
     const newRows=result.observations.filter(o=>{const key=`${o.parameterId}:${o.scope}:${o.direction}`;if(seen.has(key)||priorEpisode.some(e=>e.parameter_id===o.parameterId&&e.scope===o.scope&&e.direction===o.direction))return false;seen.add(key);return true;}).map(o=>({id:id(),user_id:user,message_id:userMessage,parameter_id:o.parameterId,quote:o.quote,value:o.value,direction:o.direction,scope:o.scope,timeframe:o.timeframe,source:o.source,strength:o.strength,intensity:o.intensity,episode_key:episode,retracted:0,created_at:t}));
     const trace={model:result.model,observations:newRows.map(o=>({id:o.id,parameterId:o.parameter_id,quote:o.quote,direction:o.direction,source:o.source,timeframe:o.timeframe})),warnings,classification:baseline.modelScores,notice:'Model scores are uncalibrated text signals, not measurements of emotion or personality.'};
-    const statements=[
+    const statements=[...correctionStatements,
       env.DB.prepare('INSERT INTO messages (id,user_id,request_id,role,content,model,trace,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(userMessage,user,b.requestId,'user',b.text.trim(),'user','{}',t),
       env.DB.prepare('INSERT INTO messages (id,user_id,request_id,role,content,model,trace,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(assistantMessage,user,b.requestId,'assistant',result.reply,result.model,JSON.stringify(trace),new Date(Date.parse(t)+1).toISOString()),
       ...newRows.map(o=>env.DB.prepare('INSERT INTO observations (id,user_id,message_id,parameter_id,quote,value,direction,scope,timeframe,source,strength,intensity,episode_key,retracted,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)').bind(o.id,user,userMessage,o.parameter_id,o.quote,o.value,o.direction,o.scope,o.timeframe,o.source,o.strength,o.intensity,episode,t)),
@@ -146,22 +159,7 @@ async function routeApi(request:Request,env:Environment,fetcher:typeof fetch=fet
       env.DB.prepare('UPDATE profiles SET revision=? WHERE user_id=?').bind(revision,user),
       env.DB.prepare('INSERT INTO revisions (id,user_id,kind,summary,created_at) VALUES (?,?,?,?,?)').bind(id(),user,'conversation',`${newRows.length} evidence record${newRows.length===1?'':'s'} added. ${/^(gemini|groq):/.test(result.model)?'External dialogue model.':'Local trained classifier; authored reply.'}`,t)
     ];
-    await env.DB.batch(statements);return json({ok:true,model:result.model,warnings});
-   });
-  }
-  if(path==='/api/feedback'&&request.method==='POST'){
-   const b=await body(request);if(typeof b.hypothesisId!=='string'||!['confirm','wrong','changed'].includes(b.kind)||typeof b.note!=='string'||b.note.length>500)throw new HttpError(400,'Invalid feedback.');
-   return await withLock(env.DB,user,async()=>{
-    const h:any=await env.DB.prepare('SELECT * FROM hypotheses WHERE id=? AND user_id=? AND superseded_at IS NULL').bind(b.hypothesisId,user).first();if(!h)throw new HttpError(404,'Hypothesis not found in your current model.');
-    const t=now(),statements=[env.DB.prepare('INSERT INTO feedback (id,user_id,hypothesis_id,kind,note,created_at) VALUES (?,?,?,?,?,?)').bind(id(),user,h.id,b.kind,b.note,t)];
-    if(b.kind==='confirm')statements.push(env.DB.prepare("UPDATE hypotheses SET evidence_strength='user_confirmed' WHERE id=? AND user_id=?").bind(h.id,user));
-    else{
-     statements.push(env.DB.prepare('UPDATE hypotheses SET superseded_at=? WHERE id=? AND user_id=?').bind(t,h.id,user));
-     const ids=[...JSON.parse(h.support_ids),...JSON.parse(h.counter_ids)];statements.push(env.DB.prepare('UPDATE observations SET retracted=1 WHERE user_id=? AND id IN (SELECT value FROM json_each(?))').bind(user,JSON.stringify(ids)));
-    }
-    statements.push(env.DB.prepare('UPDATE profiles SET revision=revision+1 WHERE user_id=?').bind(user));
-    statements.push(env.DB.prepare('INSERT INTO revisions (id,user_id,kind,summary,created_at) VALUES (?,?,?,?,?)').bind(id(),user,b.kind==='wrong'?'correction':b.kind==='changed'?'change':'confirmation',`${PARAMETER_MAP.get(h.parameter_id)?.label||'Hypothesis'}: ${b.kind==='wrong'?'earlier interpretation rejected':b.kind==='changed'?'earlier interpretation retired because the user changed':'confirmed by user'}.${b.note?' '+b.note:''}`,t));
-    await env.DB.batch(statements);return json({ok:true});
+    await env.DB.batch(statements);return json({ok:true,warnings:warnings.map(message=>message.startsWith('Please describe')?message:'AI conversation is temporarily unavailable. A basic response was used, and your message was saved.')});
    });
   }
   if(path==='/api/export'&&request.method==='GET'){
@@ -177,7 +175,20 @@ async function routeApi(request:Request,env:Environment,fetcher:typeof fetch=fet
  }catch(e){if(e instanceof HttpError)return new Response(JSON.stringify({error:e.message}),{status:e.status,headers:{...headers,...(e.status===429?{'retry-after':'60'}:{})}});console.error('HumanOS API failure',e instanceof Error?e.name:'UnknownError');return json({error:'The request could not be completed. Please retry shortly.'},500);}
 }
 
-const knownRoutes=new Set(['/api/health','/api/catalog','/api/me','/api/consent','/api/provider-consent','/api/memory','/api/messages','/api/evidence','/api/feedback','/api/export','/api/data','/api/ops/metrics']);
+// Internal domain operation; never exposed as a parameter-ID endpoint.
+export async function applyMemoryFeedback(db:D1Database,user:string,input:{hypothesisId:string;kind:string;note:string}):Promise<Response>{
+ try{
+  if(!['confirm','wrong','changed'].includes(input.kind)||typeof input.note!=='string'||input.note.length>2000)throw new HttpError(400,'Invalid feedback.');
+  return await withLock(db,user,async()=>{
+   const h:any=await db.prepare('SELECT * FROM hypotheses WHERE id=? AND user_id=? AND superseded_at IS NULL').bind(input.hypothesisId,user).first();
+   if(!h)throw new HttpError(404,'Memory not found.');
+   const time=now();
+   await db.batch([...feedbackStatements(db,user,h,input.kind,input.note,time),db.prepare('UPDATE profiles SET revision=revision+1 WHERE user_id=?').bind(user)]);
+   return json({ok:true});
+  });
+ }catch(error){return json({error:error instanceof HttpError?error.message:'Could not update memory.'},error instanceof HttpError?error.status:500);}
+}
+const knownRoutes=new Set(['/api/health','/api/config','/api/me','/api/consent','/api/provider-consent','/api/memory','/api/messages','/api/export','/api/data','/api/ops/metrics']);
 export async function handleApi(request:Request,env:Environment,fetcher:typeof fetch=fetch):Promise<Response>{
  const requestId=crypto.randomUUID(),started=Date.now(),path=new URL(request.url).pathname;
  const route=knownRoutes.has(path)?path:'/api/unknown';

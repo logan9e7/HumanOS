@@ -1,12 +1,9 @@
 'use client';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowUpRight, BookOpen, BrainCircuit, ChevronRight, GitBranch, LockKeyhole, LogOut, Menu, MessageCircle, PanelLeftClose, PanelLeftOpen, Sparkles, X } from 'lucide-react';
-export type WorkspaceTab = 'conversation' | 'profile' | 'hypotheses' | 'notes' | 'privacy';
+export type WorkspaceTab = 'conversation' | 'privacy';
 const navigation = [
     { id: 'conversation', icon: MessageCircle, label: 'Conversation', description: 'A space to think out loud' },
-    { id: 'profile', icon: BrainCircuit, label: 'Your patterns', description: '50 evolving parameters' },
-    { id: 'hypotheses', icon: GitBranch, label: 'Hypotheses', description: 'Evidence, open to correction' },
-    { id: 'notes', icon: BookOpen, label: 'Behind the model', description: 'How HumanOS works' },
     { id: 'privacy', icon: LockKeyhole, label: 'Data & privacy', description: 'Memory, sharing and your records' },
 ] as const;
 type Props = {
@@ -15,11 +12,9 @@ type Props = {
     displayName: string | null;
     signedIn: boolean;
     connected: boolean;
-    observed: number;
-    hypothesisCount: number;
     children: ReactNode;
 };
-export default function WorkspaceLayout({ tab, onNavigate, displayName, signedIn, connected, observed, hypothesisCount, children }: Props) {
+export default function WorkspaceLayout({ tab, onNavigate, displayName, signedIn, connected, children }: Props) {
     const [collapsed, setCollapsed] = useState(false);
     const [mobileOpen, setMobileOpen] = useState(false);
     const drawer = useRef<HTMLDialogElement>(null);
@@ -74,20 +69,15 @@ export default function WorkspaceLayout({ tab, onNavigate, displayName, signedIn
       <div className="workspace-label"><span className="workspace-dot"/><span>Personal workspace</span><span className="beta">BETA</span></div>
       <p className="nav-caption">YOUR SPACE</p>
       <nav aria-label={mobile ? 'Mobile navigation' : 'Main navigation'}>
-        {navigation.map(({ id, icon: Icon, label, description }, index) => <div key={id} className={index === 3 ? 'nav-secondary' : undefined}>
-          {index === 3 && <p className="nav-caption">UNDER THE SURFACE</p>}
+        {navigation.map(({ id, icon: Icon, label, description }, index) => <div key={id} className={index === 1 ? 'nav-secondary' : undefined}>
+          {index === 1 && <p className="nav-caption">YOUR CONTROLS</p>}
           <button className={`nav-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined} aria-label={label} title={!mobile && collapsed ? label : undefined} onClick={() => navigate(id)}>
             <Icon size={20}/><span className="nav-copy"><b>{label}</b><small>{description}</small></span>
-            {id === 'profile' && <span className="nav-count">50</span>}
-            {id === 'hypotheses' && hypothesisCount > 0 && <span className="nav-count">{hypothesisCount}</span>}
           </button>
         </div>)}
       </nav>
       <div className="sidebar-bottom">
-        <button className="model-progress" onClick={() => navigate('profile')} aria-label={`${observed} of 50 parameters observed. Explore your patterns.`} title={!mobile && collapsed ? `${observed}/50 parameters observed` : undefined}>
-          <span className="model-progress-icon"><Sparkles size={17}/></span>
-          <span className="model-progress-copy"><span><b>Your evolving model</b><small>{observed}<span>/50</span></small></span><span className="progress-track"><span style={{ width: `${Math.min(observed, 50) * 2}%` }}/></span><span className="progress-caption">Built through conversation</span></span>
-        </button>
+
         <div className="privacy-note"><LockKeyhole size={14}/><span>Private by design. Yours to correct.</span></div>
         <div className="account">
           <span className="account-avatar" aria-hidden="true">{displayName?.slice(0, 1).toUpperCase() || 'Y'}</span>

@@ -376,3 +376,10 @@ footer a { margin-left:6px; }
 .legal-page p { color:#596b56; font-size:14px; }
 .legal-page>.btn { margin-top:20px; }
 @media(max-height:780px) and (min-width:769px) { .desktop-sidebar .sidebar-bottom { padding-top:24px; } .desktop-sidebar .model-progress { padding-block:12px; } .desktop-sidebar .workspace-label { margin-bottom:20px; } .desktop-sidebar .nav-item { min-height:58px; } }
+
+.conversation-focus { max-width:1000px; margin-inline:auto; }
+.conversation-focus .chat-scroll { height:clamp(360px,55dvh,760px); }
+.reply-tools { display:flex; align-items:center; flex-wrap:wrap; gap:14px; margin-top:10px; }
+.reply-tools small { color:#687461; font-size:10px; }
+.reply-context { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; color:#65755d; font-size:11px; }
+@media(max-width:768px){.conversation-focus .chat-scroll{height:clamp(320px,53dvh,640px);}}

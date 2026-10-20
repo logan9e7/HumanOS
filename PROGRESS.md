@@ -58,3 +58,14 @@ Text-classification scores are not psychological measurements. Hypotheses are te
 - Real browser acceptance, hosted backup retention/restore and Groq account-level ZDR remain external verification gates. See docs/PRODUCTION.md.
 
 - Production dependency audit now reports zero advisories after patching Next.js to 16.3.8 and targeted transitive packages. All 39 backend tests, TypeScript, release scans and production build pass.
+
+## Internal model release — repository update, deployment pending
+
+- Conversation and Data & privacy are the only main navigation sections.
+- The normal client receives account choices, plain messages, history pagination and usage. Parameter definitions, hypotheses, evidence, scores, traces and model identifiers remain behind the server boundary.
+- Public catalog/evidence/technical-feedback endpoints are removed. Explicit personal exports retain access to derived records.
+- Past/current evidence is separated, full Unicode duplicate keys avoid prefix collisions, and provider observations require reviewed cues and server-derived polarity/time/context.
+- Natural corrections can reference a reply; wrong interpretations are retracted, while changed preferences preserve historical evidence.
+- Persisted memory participates in retrieval beyond the latest observation window; explicit response defaults honor directness/listening/length preferences.
+- Expanded regression tests and CI validate the source update. Full validation results are recorded by GitHub Actions.
+- Sites deployment is blocked by the unavailable execution environment. No new Sites version is claimed until the exact updated source is pushed and packaged through the supported workflow.

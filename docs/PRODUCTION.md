@@ -38,7 +38,7 @@ A provider reservation is serialized request UTF-8 bytes plus 4,096 units, inclu
 
 Conversation and inference records stay in D1 until user deletion. Pausing memory blocks new conversations, while existing records and correction controls remain available. This is not end-to-end encryption. Active deletion removes all seven user-owned table contents for that account; quotas are user-owned and removed too. Separate HMAC usage counters continue enforcing limits until expiry, avoiding a deletion/reconsent bypass. Daily counter rows expire after 48 hours, minute rows after two minutes, aggregate metrics after seven days; expired rows are cleaned in bounded batches during subsequent message activity. No background purge SLA is claimed.
 
-The interface reads 600 recent observations as a bounded inference working set, and 100 latest current hypotheses/revisions. This is an engineering limit, not a claim of exhaustive semantic recall. Every stored record remains in complete exports, and all observation links for a selected hypothesis can be loaded. Exact duplicate episodes are checked against stored history. Paid-scale retrieval and validated personality inference remain separate work.
+The backend uses 600 recent observations as a bounded inference working set, and 100 latest current hypotheses/revisions. This is an engineering limit, not a claim of exhaustive semantic recall. Every stored record remains in complete exports, and all observation links for a selected hypothesis can be loaded. Exact duplicate episodes are checked against stored history. Paid-scale retrieval and validated personality inference remain separate work.
 
 Groq receives at most eight recent messages truncated to 1,500 characters each, the current message and up to eight provisional hypotheses. The account-level Zero Data Retention setting has not been inspected or enabled through this integration. Review https://console.groq.com/docs/your-data and enable the desired setting in the Groq organization before inviting users who require that guarantee. Do not promise that deleting D1 data recalls provider processing or erases platform backups immediately.
 
@@ -86,3 +86,11 @@ Managed `control-browser` is unavailable in this environment. No actual sign-in,
 - Enable/verify GitHub Actions and failure notifications if repository settings block them.
 
 Charging users additionally needs billing, entitlement/refund handling and evidence that personalization is useful. Current model metrics measure English Reddit text classification, not psychological validity or individual emotion accuracy. No unverified production-readiness or legal-compliance certification is asserted.
+
+## 1.1.0 internal model update — pending publication
+
+The ordinary API deliberately omits inference diagnostics. `/api/config` returns only provider name/availability; `/api/me` and message history return plain content, IDs/timestamps and a basic/AI processing indicator. `/api/catalog`, `/api/evidence` and `/api/feedback` are no longer public user routes. User data export remains an explicit mechanism to access the user's derived records.
+
+Wrong interpretations and changed circumstances are applied through internal domain operations; a chat turn can target an earlier assistant message without receiving hypothesis IDs. A correction with more than one plausible target is not applied automatically. State and past evidence are grouped separately, and changed evidence stays historical instead of being marked false.
+
+The source update must be validated in GitHub CI, then opened, packaged, pushed and deployed through the Sites workflow when an execution environment becomes available. Do not pass a GitHub-only commit SHA to Sites: its source repository is separate. The live smoke script supports both 1.0.0 and 1.1.0 during this transition and checks the new visibility boundary only when the live release is 1.1.0.
