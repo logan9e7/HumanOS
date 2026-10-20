@@ -1,0 +1,4 @@
+HumanOS TF-IDF/logistic-regression baseline trained using Google Research GoEmotions.
+Dataset: https://github.com/google-research/google-research/tree/master/goemotions
+Paper: Demszky et al., GoEmotions: A Dataset of Fine-Grained Emotions (ACL 2020).
+Reddit-origin text is not bundled in this artifact. Model weights are not a psychological assessment.

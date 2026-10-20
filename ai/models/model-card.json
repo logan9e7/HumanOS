@@ -1,0 +1,24 @@
+{
+  "version": "goemotions-tfidf-logreg-v1",
+  "algorithm": "TF-IDF unigrams/bigrams + one-vs-rest logistic regression",
+  "features": 7000,
+  "labels": 28,
+  "train_examples": 43410,
+  "dev_examples": 5426,
+  "test_examples": 5427,
+  "seed": 42,
+  "micro_f1": 0.5454,
+  "macro_f1": 0.4175,
+  "micro_precision": 0.5245,
+  "micro_recall": 0.568,
+  "source": "https://github.com/google-research/google-research/tree/master/goemotions",
+  "paper": "https://aclanthology.org/2020.acl-main.372/",
+  "license": "Apache-2.0 (Google Research source/data distribution); Reddit-origin text",
+  "limitations": [
+    "English Reddit comments differ from private conversation.",
+    "Scores are not calibrated probabilities or clinical measurements.",
+    "Does not infer hormone levels, diagnoses or validated personality scores.",
+    "No private user data enters training."
+  ],
+  "model_sha256": "d1d3c3060b4fd9edc459e06f06f46f2b7860785a4fc9764b60b4f38d0b5f19f1"
+}

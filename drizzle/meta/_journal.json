@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1792469838057,
+      "tag": "0000_needy_shotgun",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792469935401,
+      "tag": "0001_workable_thunderbird",
+      "breakpoints": true
+    }
+  ]
+}
