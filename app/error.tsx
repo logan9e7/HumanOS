@@ -1,0 +1,2 @@
+'use client';
+export default function ErrorPage({reset}:{error:Error&{digest?:string};reset:()=>void}){return <div className="legal-page" role="alert"><p className="eyebrow">SOMETHING DIDN’T LOAD</p><h1>Let’s try that again.</h1><p>Your saved conversations remain in your account. If a message failed, retry it after reconnecting.</p><button className="btn primary" onClick={reset}>Try again</button><p><a href="/">Return to HumanOS</a></p></div>;}

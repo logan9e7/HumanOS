@@ -24,7 +24,7 @@
 
 ## Verification
 
-- 22 backend tests pass.
+- Expanded backend suite includes 39 tests covering launch hardening, large exports and recovery data.
 - TypeScript checks and production build pass.
 - Server-rendered layout checks pass for all four sections and both account states.
 - Real Groq model-list request succeeds.
@@ -44,3 +44,17 @@
 ## Important interpretation limits
 
 Text-classification scores are not psychological measurements. Hypotheses are tentative and context-dependent. No hormone concentration, clinical diagnosis or fixed personality score is inferred. Novel-based character exercises can test belief revision but cannot validate human psychology.
+
+## Production hardening release
+
+- Complete exports paginate across requests, remain within free-tier per-invocation query limits and reject concurrent revisions; verified with 10,005 messages.
+- Conversation history uses stable keyset pagination with scroll anchoring and linked-evidence retrieval.
+- Pause/resume memory, dedicated Data & privacy controls and public privacy/terms notices; legacy accounts acknowledge the revised notice.
+- Persistent HMAC quotas survive profile deletion. User and service burst/day limits, conservative shared model reservation limits, circuit breaker and an AI kill switch are implemented.
+- Request-body byte bounds, method/origin controls, batched SQL updates and security headers are enforced.
+- Application request logs omit message/identity/IP/key data. Protected aggregate metrics and request IDs support diagnosis.
+- CI and hourly live-check workflow definitions, secret/migration release scan, complete-export recovery test and operator recovery runbook are added.
+- Operational secrets and limits are configured in Sites, separate from source. The existing Groq credential is preserved pending operator replacement/revocation.
+- Real browser acceptance, hosted backup retention/restore and Groq account-level ZDR remain external verification gates. See docs/PRODUCTION.md.
+
+- Production dependency audit now reports zero advisories after patching Next.js to 16.3.8 and targeted transitive packages. All 39 backend tests, TypeScript, release scans and production build pass.

@@ -15,6 +15,13 @@
       "when": 1792469935401,
       "tag": "0001_workable_thunderbird",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792473292636,
+      "tag": "0002_wise_shiver_man",
+      "breakpoints": true
     }
   ]
 }

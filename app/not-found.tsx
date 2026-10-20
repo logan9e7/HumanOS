@@ -1,0 +1,1 @@
+export default function NotFound(){return <div className="legal-page"><p className="eyebrow">PAGE NOT FOUND</p><h1>Let’s find your way back.</h1><p>This page isn’t available.</p><a className="btn primary" href="/">Open my workspace</a></div>;}

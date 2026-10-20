@@ -1,12 +1,13 @@
 'use client';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowUpRight, BookOpen, BrainCircuit, ChevronRight, GitBranch, LockKeyhole, LogOut, Menu, MessageCircle, PanelLeftClose, PanelLeftOpen, Sparkles, X } from 'lucide-react';
-export type WorkspaceTab = 'conversation' | 'profile' | 'hypotheses' | 'notes';
+export type WorkspaceTab = 'conversation' | 'profile' | 'hypotheses' | 'notes' | 'privacy';
 const navigation = [
     { id: 'conversation', icon: MessageCircle, label: 'Conversation', description: 'A space to think out loud' },
     { id: 'profile', icon: BrainCircuit, label: 'Your patterns', description: '50 evolving parameters' },
     { id: 'hypotheses', icon: GitBranch, label: 'Hypotheses', description: 'Evidence, open to correction' },
     { id: 'notes', icon: BookOpen, label: 'Behind the model', description: 'How HumanOS works' },
+    { id: 'privacy', icon: LockKeyhole, label: 'Data & privacy', description: 'Memory, sharing and your records' },
 ] as const;
 type Props = {
     tab: WorkspaceTab;

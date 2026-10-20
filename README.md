@@ -2,6 +2,8 @@
 
 HumanOS now has a real server API, a D1 SQL database, per-user identity, 50 parameters, a trained text classifier, a versioned hypothesis ledger, correction/change feedback, and an interface connected to those records. Public hosting is preserved; personal records require ChatGPT sign-in and storage consent. There are no personality questionnaires.
 
+See [release and operations](docs/PRODUCTION.md) for release checks, runtime limits, recovery and the remaining external launch gates.
+
 ## What works now
 
 - Dispatch-owned ChatGPT sign-in; user IDs are read from Sites-injected request headers.
@@ -13,7 +15,9 @@ HumanOS now has a real server API, a D1 SQL database, per-user identity, 50 para
 - Provisional hypotheses with supporting evidence, counter-evidence and alternative interpretations.
 - Distinct feedback for an incorrect interpretation versus a user who has changed.
 - Time-dependent relevance, duplicate-evidence suppression, and transparent model labels.
-- Private data export and deletion from the active database.
+- Full paginated data export without a per-table cutoff, cursor-based history, memory pause/resume and deletion from the active database.
+- Public privacy/terms pages and a dedicated Data & privacy section.
+- Persistent per-user and shared usage limits, bounded AI reservations, circuit breaker, protected operational metrics and release/live-check workflows.
 - Idempotent message requests, per-user update locks and a limit of 80 messages per UTC day.
 - Groq structured-output extraction/dialogue, strictly server-side and separately opt-in per user; the Gemini adapter remains available.
 
@@ -31,7 +35,7 @@ The public site can be loaded anonymously. `/api/catalog` and `/api/health` are 
 
 **Configured provider:** Groq, using `openai/gpt-oss-20b`. The key is stored only as a secret in Sites runtime settings. A real synthetic-input request through `server/provider.ts` returned a valid reply and a grounded anxiety observation. The key is never included in this repository, frontend bundle, model artifact, documentation, or logs.
 
-Each signed-in user explicitly enables external processing. The provider receives the current message, up to eight recent messages, and up to eight provisional hypotheses. This choice is visible directly above the conversation and can be disabled under Behind the model. No private conversation is used to retrain the baseline.
+Each signed-in user explicitly enables external processing. The provider receives the current message, up to eight recent messages (each capped at 1,500 characters), and up to eight provisional hypotheses. This choice is visible directly above the conversation and can be disabled under Behind the model. No private conversation is used to retrain the baseline.
 
 Server-only configuration:
 
@@ -99,7 +103,7 @@ These are a versioned starting catalog, not clinical scales. Hormone levels and 
 
 ## Data model
 
-`db/schema.ts` defines `profiles`, `messages`, `observations`, `hypotheses`, `feedback`, `revisions`, and `quotas`. Append-only migrations live in `drizzle/`, including Drizzle metadata. Do not edit applied migrations. User correction retracts the affected interpretation's observation links; the original message remains available in the private export. Old hypothesis versions are retained with `superseded_at`. User change and wrong inference are stored as different revision kinds. UI lists the latest 100 messages, 600 observations and 100 current hypotheses/revisions. Export includes up to 10,000 records per table.
+`db/schema.ts` defines seven user-owned tables (`profiles`, `messages`, `observations`, `hypotheses`, `feedback`, `revisions`, `quotas`) and two operational tables (`usage_buckets`, `app_metrics`). Append-only migrations live in `drizzle/`, including Drizzle metadata. Do not edit applied migrations. User correction retracts the affected interpretation's observation links; the original message remains available in the private export. Old hypothesis versions are retained with `superseded_at`. User change and wrong inference are stored as different revision kinds. The UI loads 40 messages per cursor page, 600 recent working observations and 100 current hypotheses/revisions. All linked evidence for a hypothesis can be loaded. Complete exports use revision-checked pages of 200 records per request with no table cutoff; concurrent changes abort the export safely. Operational counters are excluded from personal exports and contain no message content.
 
 Mutations use a per-user D1 lock with a stale-lock deadline. Provider calls have a shorter timeout. Profile updates, messages and evidence are committed together via D1 batch transactions. Model requests are bounded. Anonymous visitors cannot access or mutate a user profile. User-input text is rendered by React as text; no raw HTML interpolation is used.
 
@@ -108,7 +112,10 @@ Mutations use a per-user D1 lock with a stale-lock deadline. Provider calls have
 - `server/parameters.ts`: versioned 50-parameter catalog and observation contract.
 - `server/classifier.ts`: CPU-only inference from trained weights.
 - `server/inference.ts`: explicit evidence extraction, negation, timeframe/context handling, relevance and hypothesis building.
-- `server/provider.ts`: optional Gemini structured-output adapter.
+- `server/provider.ts`: Groq/Gemini structured-output adapters and bounded provider calls.
+- `server/history.ts`, `lib/export-data.ts`: paginated history and complete, revision-consistent export.
+- `server/operations.ts`: HMAC quotas, model budgets, circuit breaker and aggregate metrics.
+- `docs/PRODUCTION.md`: operations, recovery and honest release gates.
 - `server/api.ts`: auth boundaries, limits, D1 operations, corrections, exports and deletion.
 - `app/api/[...path]/route.ts`: hosted server route.
 - `db/schema.ts`, `drizzle/`: database definitions and migration history.
@@ -123,7 +130,7 @@ npm run typecheck
 npm test
 ```
 
-The 22-test backend suite covers model parity, unknowns, attribution, negation, historical evidence, consent, authentication, cross-origin rejection, private user isolation, persistence, idempotency, duplicate evidence, correction versus change, confirmed preferences, full deletion, update locks, quotas, provider validation and provider fallback.
+The expanded backend suite covers model parity, unknowns, attribution, negation, historical evidence, consent, authentication, cross-origin rejection, private user isolation, persistence, idempotency, duplicate evidence, correction versus change, confirmed preferences, full deletion, update locks, quotas, provider validation and provider fallback.
 
 Build through the Sites helper; retain the `sites()` integration in `vite.config.ts`. Browser/visual QA is unavailable because the managed control-browser skill is not installed. No actual browser-flow verification is claimed. Anonymous live HTTP health/auth checks and native D1 provisioning checks should be performed after deployment.
 
